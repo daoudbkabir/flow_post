@@ -36,3 +36,9 @@ button { cursor: pointer; border: 0; }
 /* shadcn semantic tokens used by the scaffold */
 @theme inline { --color-background: var(--ink); --color-foreground: var(--paper); --color-card: var(--ink-card); --color-card-foreground: var(--paper); --color-popover: var(--ink-card); --color-popover-foreground: var(--paper); --color-primary: var(--lime); --color-primary-foreground: var(--ink); --color-secondary: #2b3026; --color-secondary-foreground: var(--paper); --color-muted: #2b3026; --color-muted-foreground: #9da399; --color-accent: #2b3026; --color-accent-foreground: var(--paper); --color-border: var(--line); --color-input: var(--line); --color-ring: var(--lime); --radius: 3px; }
 @layer base { * { border-color: var(--line); } }
+
+.library-state { min-height: 190px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; padding: 28px; border-top: 1px solid #dedbd3; color: #7f8778; text-align: center; font-size: 11px; }
+.library-state svg { color: #91ad3b; }
+.library-state strong { color: #3f4639; font: 500 18px 'Space Grotesk', sans-serif; letter-spacing: -.04em; }
+.library-state .button, .library-state .text-button { margin-top: 8px; }
+.library-error strong { color: #a05c49; }
