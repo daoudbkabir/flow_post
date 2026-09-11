@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users } from "../drizzle/schema";
+import { InsertContentItem, InsertUser, contentItems, users } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -114,6 +114,44 @@ export async function updateUserProfile(
   );
   await db.update(users).set({ ...changes, updatedAt: new Date() }).where(eq(users.id, id));
   return getUserById(id);
+}
+
+export type ContentInput = Pick<InsertContentItem, "title" | "body" | "status" | "contentType">;
+export type ContentUpdate = Partial<ContentInput>;
+
+export async function createContent(userId: number, input: ContentInput) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  const result = await db.insert(contentItems).values({ userId, ...input });
+  return getContentForUser(userId, Number(result[0].insertId));
+}
+
+export async function listContentForUser(userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  return db.select().from(contentItems).where(eq(contentItems.userId, userId)).orderBy(desc(contentItems.updatedAt));
+}
+
+export async function getContentForUser(userId: number, id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  const result = await db.select().from(contentItems).where(and(eq(contentItems.id, id), eq(contentItems.userId, userId))).limit(1);
+  return result[0];
+}
+
+export async function updateContentForUser(userId: number, id: number, input: ContentUpdate) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  const changes = Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
+  await db.update(contentItems).set({ ...changes, updatedAt: new Date() }).where(and(eq(contentItems.id, id), eq(contentItems.userId, userId)));
+  return getContentForUser(userId, id);
+}
+
+export async function deleteContentForUser(userId: number, id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+  const result = await db.delete(contentItems).where(and(eq(contentItems.id, id), eq(contentItems.userId, userId)));
+  return Number(result[0].affectedRows ?? 0) > 0;
 }
 
 // TODO: add feature queries here as your schema grows.

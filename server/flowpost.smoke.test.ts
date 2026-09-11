@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appRouter } from "./routers";
 import * as db from "./db";
-import type { User } from "../drizzle/schema";
+import type { ContentItem, User } from "../drizzle/schema";
 import type { TrpcContext } from "./_core/context";
 
 function createUser(overrides: Partial<User> = {}): User {
@@ -31,11 +31,26 @@ function createContext(user?: User): TrpcContext {
   };
 }
 
+function createContent(overrides: Partial<ContentItem> = {}): ContentItem {
+  const now = new Date();
+  return {
+    id: 101,
+    userId: 7,
+    title: "Recovery is not laziness",
+    body: "A short draft body.",
+    status: "DRAFT",
+    contentType: "POST",
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("FlowPost auth and profile coverage", () => {
+describe("FlowPost auth, profile, and content ownership coverage", () => {
   it("exposes a public auth query for logged-out workspace visitors", async () => {
     const caller = appRouter.createCaller(createContext());
     await expect(caller.auth.me()).resolves.toBeNull();
@@ -97,6 +112,122 @@ describe("FlowPost auth and profile coverage", () => {
   it("validates profile fields server-side before mutation", async () => {
     const caller = appRouter.createCaller(createContext(createUser()));
     await expect(caller.auth.updateProfile({ username: "x" })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("creates a draft for the authenticated owner", async () => {
+    const createSpy = vi.spyOn(db, "createContent").mockImplementation(async (userId, input) => createContent({ userId, ...input }));
+    const caller = appRouter.createCaller(createContext(createUser({ id: 42 })));
+
+    const item = await caller.content.create({ title: "My first draft", body: "A useful idea.", status: "DRAFT", contentType: "POST" });
+
+    expect(createSpy).toHaveBeenCalledWith(42, { title: "My first draft", body: "A useful idea.", status: "DRAFT", contentType: "POST" });
+    expect(item.userId).toBe(42);
+  });
+
+  it("lists only content for the authenticated owner", async () => {
+    const listSpy = vi.spyOn(db, "listContentForUser").mockImplementation(async userId => [createContent({ userId })]);
+    const caller = appRouter.createCaller(createContext(createUser({ id: 42 })));
+
+    const items = await caller.content.list();
+
+    expect(listSpy).toHaveBeenCalledWith(42);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.userId).toBe(42);
+  });
+
+  it("retrieves content owned by the authenticated user", async () => {
+    const getSpy = vi.spyOn(db, "getContentForUser").mockResolvedValue(createContent({ id: 101, userId: 42 }));
+    const caller = appRouter.createCaller(createContext(createUser({ id: 42 })));
+
+    const item = await caller.content.get({ id: 101 });
+
+    expect(getSpy).toHaveBeenCalledWith(42, 101);
+    expect(item.userId).toBe(42);
+  });
+
+  it("does not reveal another user's content through get", async () => {
+    const getSpy = vi.spyOn(db, "getContentForUser").mockResolvedValue(undefined);
+    const caller = appRouter.createCaller(createContext(createUser({ id: 42 })));
+
+    await expect(caller.content.get({ id: 101 })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(getSpy).toHaveBeenCalledWith(42, 101);
+  });
+
+  it("updates content only through the authenticated owner scope", async () => {
+    const updateSpy = vi.spyOn(db, "updateContentForUser").mockResolvedValue(createContent({ id: 101, userId: 42, title: "Updated title" }));
+    const caller = appRouter.createCaller(createContext(createUser({ id: 42 })));
+
+    const item = await caller.content.update({ id: 101, title: "Updated title" });
+
+    expect(updateSpy).toHaveBeenCalledWith(42, 101, { title: "Updated title" });
+    expect(item.title).toBe("Updated title");
+  });
+
+  it("does not update another user's content", async () => {
+    const updateSpy = vi.spyOn(db, "updateContentForUser").mockResolvedValue(undefined);
+    const caller = appRouter.createCaller(createContext(createUser({ id: 42 })));
+
+    await expect(caller.content.update({ id: 202, title: "Should not change" })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(updateSpy).toHaveBeenCalledWith(42, 202, { title: "Should not change" });
+  });
+
+  it("deletes only content owned by the authenticated user", async () => {
+    const deleteSpy = vi.spyOn(db, "deleteContentForUser").mockResolvedValue(true);
+    const caller = appRouter.createCaller(createContext(createUser({ id: 42 })));
+
+    await expect(caller.content.delete({ id: 101 })).resolves.toEqual({ success: true });
+    expect(deleteSpy).toHaveBeenCalledWith(42, 101);
+  });
+
+  it("does not delete another user's content", async () => {
+    const deleteSpy = vi.spyOn(db, "deleteContentForUser").mockResolvedValue(false);
+    const caller = appRouter.createCaller(createContext(createUser({ id: 42 })));
+
+    await expect(caller.content.delete({ id: 202 })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(deleteSpy).toHaveBeenCalledWith(42, 202);
+  });
+
+  it("rejects unauthenticated content access", async () => {
+    const caller = appRouter.createCaller(createContext());
+    await expect(caller.content.list()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(caller.content.create({ title: "Nope", body: "Nope", status: "DRAFT", contentType: "TEXT" })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(caller.content.get({ id: 101 })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(caller.content.update({ id: 101, title: "Nope" })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+    await expect(caller.content.delete({ id: 101 })).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  });
+
+  it("rejects invalid create input before reaching the database", async () => {
+    const createSpy = vi.spyOn(db, "createContent");
+    const caller = appRouter.createCaller(createContext(createUser()));
+
+    await expect(caller.content.create({ title: "", body: "Body", status: "DRAFT", contentType: "VIDEO" } as never)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects a client-supplied content owner", async () => {
+    const createSpy = vi.spyOn(db, "createContent");
+    const caller = appRouter.createCaller(createContext(createUser({ id: 42 })));
+
+    await expect(caller.content.create({ title: "No owner override", body: "Body", status: "DRAFT", contentType: "TEXT", userId: 99 } as never)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid update input before reaching the database", async () => {
+    const updateSpy = vi.spyOn(db, "updateContentForUser");
+    const caller = appRouter.createCaller(createContext(createUser()));
+
+    await expect(caller.content.update({ id: 101, status: "PUBLISHED" } as never)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it("preserves unspecified fields during a partial update", async () => {
+    const updateSpy = vi.spyOn(db, "updateContentForUser").mockResolvedValue(createContent({ title: "New title", body: "Original body", status: "DRAFT", contentType: "SCRIPT" }));
+    const caller = appRouter.createCaller(createContext(createUser({ id: 42 })));
+
+    const item = await caller.content.update({ id: 101, title: "New title" });
+
+    expect(updateSpy).toHaveBeenCalledWith(42, 101, { title: "New title" });
+    expect(item).toMatchObject({ title: "New title", body: "Original body", status: "DRAFT", contentType: "SCRIPT" });
   });
 });
 

@@ -18,6 +18,18 @@ const profileInput = z.object({
   timezone: z.string().trim().min(1).max(64).optional(),
 }).strict();
 
+const contentStatus = z.enum(["DRAFT", "READY"]);
+const contentType = z.enum(["TEXT", "POST", "SCRIPT"]);
+const contentFields = {
+  title: z.string().trim().min(1).max(200),
+  body: z.string().max(100_000),
+  status: contentStatus,
+  contentType,
+};
+const contentCreateInput = z.object(contentFields).strict();
+const contentIdInput = z.object({ id: z.number().int().positive() }).strict();
+const contentUpdateInput = z.object({ id: z.number().int().positive(), ...contentFields }).partial({ title: true, body: true, status: true, contentType: true }).strict().refine(input => Object.keys(input).length > 1, "At least one content field is required");
+
 function isDuplicateUsernameError(error: unknown) {
   if (!error || typeof error !== "object") return false;
   const candidate = error as { code?: unknown; errno?: unknown; sqlMessage?: unknown };
@@ -76,6 +88,26 @@ export const appRouter = router({
       return {
         success: true,
       } as const;
+    }),
+  }),
+  content: router({
+    list: protectedProcedure.query(({ ctx }) => db.listContentForUser(ctx.user.id)),
+    get: protectedProcedure.input(contentIdInput).query(async ({ ctx, input }) => {
+      const item = await db.getContentForUser(ctx.user.id, input.id);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Content item not found" });
+      return item;
+    }),
+    create: protectedProcedure.input(contentCreateInput).mutation(({ ctx, input }) => db.createContent(ctx.user.id, input)),
+    update: protectedProcedure.input(contentUpdateInput).mutation(async ({ ctx, input }) => {
+      const { id, ...changes } = input;
+      const item = await db.updateContentForUser(ctx.user.id, id, changes);
+      if (!item) throw new TRPCError({ code: "NOT_FOUND", message: "Content item not found" });
+      return item;
+    }),
+    delete: protectedProcedure.input(contentIdInput).mutation(async ({ ctx, input }) => {
+      const deleted = await db.deleteContentForUser(ctx.user.id, input.id);
+      if (!deleted) throw new TRPCError({ code: "NOT_FOUND", message: "Content item not found" });
+      return { success: true } as const;
     }),
   }),
 
