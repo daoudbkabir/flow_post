@@ -102,7 +102,7 @@ export async function getUserById(id: number) {
 
 export async function updateUserProfile(
   id: number,
-  profile: Partial<Pick<InsertUser, "name" | "email" | "username" | "phone" | "timezone">>
+  profile: Partial<Pick<InsertUser, "name" | "username" | "phone" | "timezone">>
 ) {
   const db = await getDb();
   if (!db) {
